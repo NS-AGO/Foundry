@@ -1,0 +1,24 @@
+name: toy_classification
+
+target: frequency
+
+num_classes: 8
+
+head:
+  _target_: foundry.tasks.heads.ReadoutHead
+
+target_extractor:
+  _target_: foundry.tasks.targets.TargetExtractor
+  timestamp_key: acoustic_stim_trials.timestamps
+  value_key: acoustic_stim_trials.behavior_labels
+
+metrics:
+  _target_: foundry.tasks.example_metrics.example_classification_metrics
+  num_classes: ${num_classes}
+
+loss:
+  _target_: foundry.tasks.losses.CrossEntropyTaskLoss
+
+metric_summary_modes:
+  acc: max
+  loss: min

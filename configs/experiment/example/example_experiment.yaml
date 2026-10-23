@@ -1,0 +1,41 @@
+# @package _global_
+
+defaults:
+  - override /model: example_model
+  - override /data: example/example_dataconfig
+
+task_configs:
+  - example_task
+
+model:
+  num_channels: ${hyperparameters.num_channels}
+
+run:
+  project: example_project
+  name: example_experiment
+  group: example
+  seed: 42
+  log_level: INFO
+  tags:
+    - examples
+
+hyperparameters:
+  batch_size: 16
+  sequence_length: 0.5
+  fold_number: 0
+  num_workers: 4
+  learning_rate: 0.001
+  weight_decay: 0.0
+  num_channels: 64
+
+trainer:
+  max_epochs: 100
+  precision: bf16-mixed
+  callbacks:
+    early_stopping:
+      monitor: val/example_task_f1
+      mode: max
+      patience: 10
+
+stage:
+  mode: direct

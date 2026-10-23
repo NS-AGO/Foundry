@@ -8,6 +8,7 @@ from .peterson_brunton_pose_trajectory_2022 import (
     PetersonBruntonPoseTrajectory2022,
 )
 from .physionet_mi import PhysionetMI
+from .example_dataset import ExampleDataset
 
 __all__ = [
     "BrainInvadersP300",
@@ -19,4 +20,5 @@ __all__ = [
     "PavlovVerbalWmDS003655",
     "PetersonBruntonPoseTrajectory2022",
     "PhysionetMI",
+    "ExampleDataset",
 ]

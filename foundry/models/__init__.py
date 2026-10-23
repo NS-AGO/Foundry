@@ -62,6 +62,8 @@ from foundry.models.neurosoft_models import (
     SessionInputAdapter,
 )
 
+from foundry.models.example import ExampleMLP
+
 __all__ = [
     "POYOEEGModel",
     "MaskedPOYOEEGModel",
@@ -105,4 +107,5 @@ __all__ = [
     "SessionEmbeddingCache",
     "ResampleCNNEmbedding",
     "CWTCNNEmbedding",
+    "ExampleMLP",
 ]

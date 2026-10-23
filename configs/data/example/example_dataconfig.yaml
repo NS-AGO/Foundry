@@ -1,0 +1,11 @@
+_target_: foundry.data.datamodules.ExampleDataModule
+
+dataset_class: foundry.data.datasets.ExampleDataset
+
+root: /capstor/store/cscs/swissai/a0091/processed/neurosoft_example
+batch_size: ${hyperparameters.batch_size}
+num_workers: ${hyperparameters.num_workers}
+sequence_length: ${hyperparameters.sequence_length}
+
+recording_ids:
+    - "sub-01_ses-01_task-AcousticStim_desc-raw"

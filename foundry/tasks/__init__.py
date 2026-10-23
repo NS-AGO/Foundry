@@ -21,6 +21,11 @@ from foundry.tasks.metrics import (
     regression_metrics,
     ssl_metrics,
 )
+
+from foundry.tasks.example_metrics import(
+    example_classification_metrics
+)
+
 from foundry.tasks.targets import TargetExtractor, extract_multitask_targets
 
 __all__ = [
@@ -42,4 +47,5 @@ __all__ = [
     "RandomTokenMasking",
     "TemporalBlockMasking",
     "ChannelMasking",
+    "example_classification_metrics",
 ]
