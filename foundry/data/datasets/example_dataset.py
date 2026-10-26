@@ -21,6 +21,9 @@ class ExampleDataset(Dataset):
             **kwargs,
         )
 
+    # Foundry's DataModule uses these intervals to construct samplers for
+    # each split. Returning the correct intervals keeps training, validation,
+    # and test windows within their assigned regions.
     def get_sampling_intervals(
         self,
         split: Optional[Literal["train", "valid", "test"]] = None,

@@ -163,7 +163,8 @@ class Pipeline(BrainsetPipeline):
 
         channels = extract_channels(raw)
 
-        # This is the final data object and the fields you will access to retrieve data
+        # This saved structure is the interface used by the Dataset, tokenizer,
+        # and task extractors. Its field names must agree with their configured paths.
         data = Data(
             brainset=BrainsetDescription(
                 id=self.brainset_id,
@@ -184,7 +185,8 @@ class Pipeline(BrainsetPipeline):
             domain=signal.domain,
         )
 
-        # Chronological 70 / 15 / 15 split of the trials.
+        # Save split intervals during preprocessing so subsequent training runs
+        # can reuse the same partition without recreating it.
         data.train_domain, data.valid_domain, data.test_domain = trials.split(
             [0.7, 0.15, 0.15]
         )

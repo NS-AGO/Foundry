@@ -36,32 +36,19 @@ class ExampleMLP(nn.Module):
             nn.ReLU(),
         )
 
+        # Build prediction heads from the task configs so the model does not
+        # need to hard-code the task's output dimension.
         self.router = build_readout_router(
             self.task_configs,
             hidden_dim,
         )
 
+    # Foundry attaches model.tokenize to the dataset's transform pipeline.
+    # It converts each sampled Data object into the inputs, targets, and
+    # metadata expected by the training module.
     def tokenize(self, data: Data) -> dict:
-        """Prepare channel means, labels, and metadata for batching.
-
-        Parameters
-        ----------
-        data : Data
-            Implementation of a torch_brains.dataset type. The incoming data to be processed.
-
-        Returns
-        -------
-        dict
-            Dictionary of the required parameters for a foundry model run.
-
-        Raises
-        ------
-        ValueError
-            Signal is not one of [ecog, eeg, seeg, ieeg].
-        ValueError
-            Singal.shape is not (time, number_channels).
-        ValueError
-            Cannot tokenize and empty signal.
+        """
+        Prepare channel means, labels, and metadata for batching.
         """
 
         signal = np.asarray(data.ecog.data, dtype=np.float32)
@@ -76,6 +63,8 @@ class ExampleMLP(nn.Module):
 
         _, values, task_index, weights = extract_multitask_targets(self.task_configs, data)
 
+        # Foundry's training module separates this dictionary into model inputs,
+        # loss targets, and metadata. These keys form its expected batch interface.
         return {
             "input_values": torch.from_numpy(signal.mean(axis=0)),
             "task_index": pad8(task_index),
@@ -94,27 +83,19 @@ class ExampleMLP(nn.Module):
     ):
         """
         Compute predictions from neural activity.
-
-        Args:
-            input_values:
-                Neural input with shape (..., num_channels).
-
-            task_index:
-                Identifies which task-specific readout should be used.
-
-            **kwargs:
-                Additional inputs passed by the training framework.
-
-        Returns:
-            Task-specific model predictions.
         """
 
         # Compute neural representation.
         x = self.encoder(input_values)
+
+        # Reuse the window representation for each target in that window.
+        # Shape: (batch, hidden_dim) -> (batch, num_targets, hidden_dim).   
         x = x.unsqueeze(1).expand(-1, task_index.shape[1], -1)
         flat_tasks = task_index.reshape(-1)
         valid = flat_tasks > 0
 
+        # Foundry expects predictions keyed by task name so it can apply each
+        # task's configured loss and metrics.
         return self.router(
             x.reshape(-1, x.shape[-1])[valid], 
             (flat_tasks[valid] - 1).long(),

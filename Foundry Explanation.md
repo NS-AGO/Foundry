@@ -31,9 +31,9 @@ class MyPipeline(BrainsetPipeline):
 
 Detailed information about each function can be found in the [TorchBrain BrainsetPipeline documentation](https://torch-brain.readthedocs.io/en/latest/generated/api/autosummary/torch_brain.pipeline.BrainsetPipeline.html). 
 
-As a general overview, `get_manifest()` creates a manifest in the form of a pandas DataFrame. The manifest defines the individual processing units for the pipeline and contains the information needed to identify the raw data associated with each unit. Each row of the DataFrame is a `manifest_item` which is passed to `download()` and `process()`. In other words it tells the pipeline what data belongs together. Each row is one unit.
+As a general overview, `get_manifest()` creates a manifest in the form of a pandas DataFrame. The manifest defines the individual processing units for the pipeline and contains the information needed to identify the raw data associated with each unit. Each manifest row is passed to `download()`, which obtains or verifies the raw files required for that processing unit. Its return value is then passed to `process()`. In this example, the files are already available locally, so no download is needed.
 
-For example in the Neurosoft pipeline, the manifest groups recordings that belong to the same session and associates each `session_id` with the corresponding `recordings_ids`.
+For example in the Neurosoft pipeline, the manifest groups recordings that belong to the same session and associates each `session_id` with the corresponding `recording_ids`.
 
 The `download()` function verifies that all the data listed in the `manifest_item` are present in the raw data directory. It doesn’t actually download any data, just verifies a match between the manifest and a file exists.
 
@@ -91,11 +91,11 @@ If preprocessing changes a field name, update the tokenizer or task extractor ac
 ## DataModules
 
 The DataModule provides the interface between the Dataset and the model training pipeline. While the Dataset determines which recordings and time intervals are available for sampling, the DataModule configures how those samples are prepared and delivered during training.
-A DataModule typically specifies the Dataset class, batch size, number of workers, sequence length, and any transforms applied to the neural data. The DataModule selects which Dataset class to use and passes down arguments like the `recording_ids`, `split_type`, `task_type`, and `fold_number`. 
+A DataModule typically specifies the Dataset class, batch size, number of workers, sequence length, and any transforms applied to the neural data. The DataModule selects which Dataset class to use and passes down arguments like the `recording_ids`, `split_type`, `task_type`, and `fold`. 
 Preprocessing is performed in Foundry using transforms. Transforms are called sequentially in the `Compose([transform 1, transform 2, ...])` function by setting:
 
 ```python
-self.dataset.transforms = Compose([transform 1, transform 2, ...]) 
+self.dataset.transforms = Compose([transform_1, transform_2, ...]) 
 ```
 
 Transforms have three main components:
@@ -144,7 +144,7 @@ def forward(
 `input_values` contains the neural signal, while `task_index` identifies which task or readout should be applied to each output. Additional fields can be passed through `**kwargs`, for example information required by a channel strategy.
 The model should return predictions in the format expected by the task readout. In the standard Foundry models this is a dictionary mapping task names to prediction tensors:
 
-```
+```python
 return self._route_readout(x, task_index)
 ```
 
@@ -160,7 +160,7 @@ When implementing a new model, the expected input shape should therefore be clea
 Foundry separates the neural representation produced by the model from the final task-specific prediction. Models generally produce an embedding and pass it through a `ReadoutRouter`. The router uses the task configuration to select the appropriate readout head. This allows the same backbone to support different tasks without hard-coding the number of classes or output dimensions into the architecture.
 Consequently, a model should generally not implement a task-specific loss or classifier training procedure itself. It should produce the predictions required by the configured task.
 Loss functions are defined by the task configuration rather than inside the model. During initialization, `FoundryModule` reads the loss specified for each task and instantiates it:
-self.\_task_losses[name] = instantiate(cfg.loss)
+`self.\_task_losses[name] = instantiate(cfg.loss)`
 During each training, validation, or test step, `FoundryModule`:
 
 1. unpacks the batch;
@@ -225,7 +225,7 @@ num_channels: 32
 hidden_dim: 128
 ```
 
-Both, `num_channels` and `hidden_dim` match the arguments required when constructing the `ExampleMLP` model. The model yaml should mainy aim to fill out parameters for the `__init__()` class for your model. Foundry already handles the `task_config` handover, so this should not be included in the model config.
+The model configuration supplies arguments to the model’s `__init__()` method. Here, `num_channels` specifies the number of input channels and `hidden_dim` specifies the hidden representation size. Foundry supplies `task_configs` separately, so it should not also appear in the model YAML.
 
 ### Task Configuration
 The task config defines what the model predicts, how labels are extracted, and how predictions are evaluated.
@@ -258,13 +258,13 @@ metric_summary_modes:
 
 `head` defines the task-specific readout. This example uses two output logits because the task distinguishes stimulation off from stimulation on.
 
-`target_extractor` specifies the paths to the target timestamps and values inside each sampled Data object. These paths must match the fields saved in the constuction of the data object by your `pipeline.py`. In this example, behavior_ids contains integer labels: off = 0 and on = 1.
+`target_extractor` specifies the paths to the target timestamps and values inside each sampled Data object. These paths must match the fields saved in the construction of the data object by your `pipeline.py`. In this example, behavior_ids contains integer labels: off = 0 and on = 1.
 
 `metrics` defines the evaluation metrics, while `loss` defines the training objective. The metric class count must agree with the readout output dimension.
 
 `metric_summary_modes` specifies whether larger or smaller values are preferred when summarizing metrics in W&B. It does not configure early stopping; that is controlled separately by the trainer callbacks.
 
-## Experiment Configuration
+### Experiment Configuration
 The experiment config selects the component configurations and provides settings for a particular run. It acts as the main integrating config file for a Foundry run.
 
 The file `configs/experiment/example/example_experiment.yaml` contains:
@@ -338,9 +338,9 @@ uv run python main.py \
 
 This keeps experiment choices in configuration files while leaving the dataset, model, and training implementations reusable.
 
-## Running on Foundry
+## Running on CSCS
 
-To run on foundry you need to create a .toml file that points to a docker container. A baseline image has already been created in `a0091.ce-images` called `example-foundry.sqsh`. If you wish to create your own image you can follow the tutorial on the cscs documentation for [llm inference tutorial](https://docs.cscs.ch/tutorials/ml/llm-inference/#build-a-modified-ngc-pytorch-container).
+On CSCS Clariden, an environment TOML file selects the container image and filesystem mounts used by the job. The repository includes an example configuration and run_example.sh for submitting the experiment through Slurm. Update the account, image, and filesystem paths for your environment. Running Foundry locally does not require this container setup. If you wish to create your own image you can follow the tutorial on the cscs documentation for [llm inference tutorial](https://docs.cscs.ch/tutorials/ml/llm-inference/#build-a-modified-ngc-pytorch-container).
 
 To run a foundry session you can either spawn a srun and call
 

@@ -44,6 +44,11 @@ class ExampleDataModule(NeuralDataModule):
             **kwargs,
         )
 
+    # setup() makes the dataset available before fitting data-dependent
+    # transforms. Attach those transforms before the tokenizer, while samples
+    # are still Data objects.
+
+    # Trasnforms are applied here so the underlying data object remain immutable.
     def setup(self, stage=None):
         super().setup(stage)
 
