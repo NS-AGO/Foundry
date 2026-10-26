@@ -33,7 +33,7 @@ trainer:
   precision: bf16-mixed
   callbacks:
     early_stopping:
-      monitor: val/example_task_f1
+      monitor: val/example_task_acc
       mode: max
       patience: 10
 

@@ -1,6 +1,6 @@
 # Dataset and Module Implementation in Foundry
 
-This guide walks through how to implement a model and a dataset in foundry. Both the model and the dataset pipeline are independent of each other and can be implemented without touching the other. The task config mediates the shared contact between model and data pipeline.
+This guide explains how to implement a dataset and a model in Foundry. The preprocessing pipeline and model can be developed separately, provided they agree on the data interface. The pipeline defines the saved signal and label fields, the tokenizer converts sampled data into model inputs and targets, and the task configuration defines how targets are extracted, predicted, and evaluated.
 
 > **Figure:** Add an overview image here.
 
@@ -65,12 +65,29 @@ data = dataset.get_recording(recording_id)
 
 This returns the corresponding `Data` object. Importantly, the data is lazy-loaded, meaning the entire recording does not need to be loaded into memory immediately. Only the attributes or time ranges that are actually requested are loaded.
 The Dataset itself does not decide what the individual training samples are. Instead, it provides access to recordings and defines which time intervals are available for sampling.
+
 `get_sampling_intervals()` returns the time intervals that can be sampled from each recording. By default, these intervals cover the entire recording, but a custom Dataset can override this behaviour to restrict sampling to particular intervals, such as trials.
+
 Samplers then use these intervals to determine the individual samples used during training. For example, a sampler can select fixed-length windows from the available intervals. In other words the dataset defines what data is available and the sampler selects what becomes a sample.
+
 A `DatasetIndex` specifies a particular recording and a start and end time. It tells the Dataset exactly which portion of a recording should be loaded. The Dataset uses this information to return a `Data` object containing that  section of the recording.
 This is different from a standard PyTorch Dataset, where the Dataset itself generally defines the individual samples. In TorchBrain, the Dataset provides access to the recordings, while samplers determine how those recordings are divided into samples.
 A Dataset can also be subclassed when a dataset requires behaviour beyond simply loading the HDF5 recordings. For example, `get_sampling_intervals()` can be overridden to specify custom sampling regions, and `get_recording_hook()` can be overridden to perform lightweight processing immediately after a recording is loaded.
+
 This allows a Dataset to contain specific logic while keeping the underlying `Data` objects standardized.
+
+Field names are part of the interface between preprocessing and training. They are configurable, but every component must use matching paths. The working example uses:
+
+| Saved field | Purpose |
+|---|---|
+| `ecog.data` | Neural signal with shape `(time, channels)` |
+| `channels` | Channel identifiers and metadata |
+| `on_vs_off_trials.timestamps` | Target times, stored at interval midpoints |
+| `on_vs_off_trials.behavior_ids` | Integer targets: off = 0, on = 1 |
+| `train_domain`, `valid_domain`, `test_domain` | Intervals available for each split |
+
+If preprocessing changes a field name, update the tokenizer or task extractor accordingly and regenerate the processed files. Changing Python code does not modify existing HDF5 files.
+
 ## DataModules
 
 The DataModule provides the interface between the Dataset and the model training pipeline. While the Dataset determines which recordings and time intervals are available for sampling, the DataModule configures how those samples are prepared and delivered during training.
@@ -87,7 +104,19 @@ Transforms have three main components:
 - an optional `fit()` method for learning parameters from the dataset.
 - a `__call__()` method that applies the transformation to a `Data` object.
 
-Some transforms need to calculate parameters from the dataset before they can be applied. In the example below. In these cases a `fit()` function is defined and called in `datamodule.setup()` before the final `Compose()` object is formed.
+Some transforms learn parameters from data before they can be applied. For example, a standardization transform may estimate a mean and standard deviation. Fit these parameters using only samples inside the training intervals, then reuse them for validation and testing. Reading entire recordings during fitting can include validation or test data, even when `split="train"` was requested.
+
+The DataModule should attach each transform only once, because `setup()` may be called more than once during a run. The provided `ExampleTransform` is a placeholder: it currently returns its input unchanged.
+
+## Tokenization and Batching
+
+In Foundry, tokenization means converting a sampled `Data` object into the dictionary consumed by the training pipeline. It does not necessarily involve dividing signals into patches or assigning vocabulary IDs. A simple MLP still needs this preparation step to extract its input features and labels.
+
+In the example, `tokenize()` reads `data.ecog.data`, which has shape `(T, C)`, and averages over time to produce one value per channel. Batching then combines these vectors into a tensor of shape `(B, C)`. The MLP therefore uses the mean signal within each window and discards its temporal structure.
+
+The tokenizer also returns `task_index`, `target_values`, `target_weights`, and metadata such as `session_id` and `absolute_start`. `extract_multitask_targets()` prepares targets using the configured target extractors. The batching wrappers `pad8()` and `chain()` allow samples with different numbers of targets to be combined.
+
+Task indices are one-based, with zero reserved for padding. The example model removes padded entries and subtracts one before passing task indices to the readout router. Transforms that operate on Data objects must run before tokenization, because tokenization returns a dictionary.
 
 ## Model Creation
 
@@ -147,78 +176,167 @@ The optimizer is also configured outside the model. `FoundryModule.configure_opt
 For this reason, a new model generally should not define its own optimizer or training loop. Hyperparameters such as learning rate, weight decay, and scheduler settings belong in the training configuration.
 ## Configuration Files
 
-Foundry uses Hydra configuration files to define how datasets, ## DataModules, models, tasks, and training settings are assembled into an experiment. This allows the same Python implementation to be reused with different datasets, model architectures, hyperparameters, and tasks without modifying the source code.
-When creating a new dataset, model, or experiment, the required configuration depends on which component is being added. In general, a new component should have a corresponding configuration file that specifies its class and the parameters needed to instantiate it.
-dataset configuration specifies which Dataset class should be instantiated and provides the parameters needed to construct it.
-For example:
-\_target\_: foundry.datasets.MyDataset
+Foundry uses Hydra configuration files to select and configure the DataModule, model, tasks, and training settings. An experiment config brings these components together, allowing different experiments to use the same Python implementations.
 
-recording_ids:
-  - sub-01_ses-01
-  - sub-02_ses-01
+The examples below follow the working example implementation.
 
-split_type: train
-task_type: classification
-The `_target_` field tells Hydra which Python class to instantiate. The remaining fields are passed to the class constructor.
-Dataset configurations are useful for keeping dataset-specific information separate from the Dataset implementation. The Python class defines how the dataset works, while the configuration specifies which dataset and recordings should be used.
-When creating a new Dataset class, a corresponding configuration should therefore normally be added under the appropriate dataset configuration directory.
-The DataModule configuration specifies how the dataset is presented to the training pipeline.
-Typical parameters include:
-\_target\_: foundry.datamodules.MyDataModule
+### DataModule Configuration
 
-dataset:
-  \_target\_: foundry.datasets.MyDataset
-  recording_ids: [...]
+The DataModule config specifies which DataModule and Dataset classes to use, where the processed data is stored, and how samples are loaded.
 
-batch_size: 32
-num_workers: 8
-sequence_length: 125
-The DataModule configuration can also contain parameters controlling preprocessing, splitting, sampling, and transforms.
-A model configuration specifies the model class and its architecture-specific hyperparameters. 
-The task configuration defines what the model is being trained to predict and how its predictions are evaluated.
-A task configuration typically specifies the target, loss, metrics, and readout-related settings. Conceptually:
-name: frequency_classification
-
-loss:
-  \_target\_: foundry.losses.CrossEntropyLoss
-
-metrics:
-  - accuracy
-  - f1
-The exact structure depends on the task configuration system used by the experiment.
-Task configuration is separate from the model because the same model architecture can be used for different tasks. For example, a neural encoder could produce the same representation while different task configurations define classification, regression, or other prediction objectives.
-Training configuration specifies how the model is optimized rather than how the model itself is constructed.
-Typical parameters include:
+The file `configs/data/example/example_dataconfig.yaml` contains:
 
 ```yaml
-learning_rate: 1e-4
-weight_decay: 0.01
+_target_: foundry.data.datamodules.ExampleDataModule
 
-scheduler_name: phased
-warmup: 1000
-hold: 1000
-decay: 10000
+dataset_class: foundry.data.datasets.ExampleDataset
+
+root: ./data/processed
+batch_size: ${hyperparameters.batch_size}
+num_workers: ${hyperparameters.num_workers}
+sequence_length: ${hyperparameters.sequence_length}
+
+recording_ids:
+  - sub-01_ses-01_task-AcousticStim_desc-raw
 ```
-These parameters are consumed by the training module. The model itself should therefore generally not define its own optimizer or training loop.
-This separation allows the same model to be trained with different optimization settings without changing the model implementation.
-The experiment configuration brings the individual components together. 
-data:
-  datamodule:
-    \_target\_: foundry.datamodules.MyDataModule
+`_target_` identifies the Python class that Hydra instantiates. The remaining entries configure that class.
+
+`root` points to the parent directory containing the processed dataset. In this example, `ExampleDataset` appends `neurosoft_monkeys_2026`, so the recording files are read from:
+
+```
+./data/processed/neurosoft_monkeys_2026/
+```
+
+`recording_ids` selects the recordings to load. Each identifier corresponds to an HDF5 filename without its `.h5` extension.
+
+`sequence_length` is the sampling-window duration in seconds. A value of `0.5` requests half-second windows.
+
+Values such as `${hyperparameters.batch_size}` are Hydra interpolations: their values are taken from the corresponding fields in the experiment configuration.
+
+### Model Configuration
+The model config selects the model class and its architecture settings.
+
+The file `configs/model/example_model.yaml` contains:
+
+```yaml
+_target_: foundry.models.ExampleMLP
+
+num_channels: 32
+hidden_dim: 128
+```
+
+Both, `num_channels` and `hidden_dim` match the arguments required when constructing the `ExampleMLP` model. The model yaml should mainy aim to fill out parameters for the `__init__()` class for your model. Foundry already handles the `task_config` handover, so this should not be included in the model config.
+
+### Task Configuration
+The task config defines what the model predicts, how labels are extracted, and how predictions are evaluated.
+
+The file `configs/tasks/example_task.yaml` contains:
+
+```yaml
+name: example_task
+
+head:
+  _target_: foundry.tasks.heads.ReadoutHead
+  output_dim: 2
+
+target_extractor:
+  _target_: foundry.tasks.targets.TargetExtractor
+  timestamp_key: on_vs_off_trials.timestamps
+  value_key: on_vs_off_trials.behavior_ids
+
+metrics:
+  _target_: foundry.tasks.example_metrics.example_classification_metrics
+  num_classes: 2
+
+loss:
+  _target_: foundry.tasks.losses.CrossEntropyTaskLoss
+
+metric_summary_modes:
+  acc: max
+  loss: min
+```
+
+`head` defines the task-specific readout. This example uses two output logits because the task distinguishes stimulation off from stimulation on.
+
+`target_extractor` specifies the paths to the target timestamps and values inside each sampled Data object. These paths must match the fields saved in the constuction of the data object by your `pipeline.py`. In this example, behavior_ids contains integer labels: off = 0 and on = 1.
+
+`metrics` defines the evaluation metrics, while `loss` defines the training objective. The metric class count must agree with the readout output dimension.
+
+`metric_summary_modes` specifies whether larger or smaller values are preferred when summarizing metrics in W&B. It does not configure early stopping; that is controlled separately by the trainer callbacks.
+
+## Experiment Configuration
+The experiment config selects the component configurations and provides settings for a particular run. It acts as the main integrating config file for a Foundry run.
+
+The file `configs/experiment/example/example_experiment.yaml` contains:
+
+```yaml
+# @package _global_
+
+defaults:
+  - override /model: example_model
+  - override /data: example/example_dataconfig
+
+task_configs:
+  - example_task
 
 model:
-  \_target\_: foundry.models.MyModel
-  hidden_dim: 128
+  num_channels: ${hyperparameters.num_channels}
 
-task:
-  name: frequency_classification
+run:
+  project: example_project
+  name: example_experiment
+  group: example
+  seed: 42
+  tags:
+    - examples
 
-training:
-  learning_rate: 1e-4
-  batch_size: 32
-The experiment configuration therefore acts as the entry point for a particular training run. It determines which Dataset, DataModule, model, task, and training settings are used together.
-Rather than creating a new Python training script for every experiment, different experiments can be created by composing different configuration files.
+hyperparameters:
+  batch_size: 16
+  sequence_length: 0.5
+  num_workers: 4
+  learning_rate: 0.001
+  weight_decay: 0.0
+  num_channels: 32
 
+trainer:
+  max_epochs: 100
+  precision: bf16-mixed
+  callbacks:
+    early_stopping:
+      monitor: val/example_task_acc
+      mode: max
+      patience: 10
+
+stage:
+  mode: direct
+```
+
+The `defaults` list selects the model and `DataModule` configs. Paths are relative to their configuration groups: `example_model` selects `configs/model/example_model.yaml`, while `example/example_dataconfig` selects `configs/data/example/example_dataconfig.yaml`.
+
+`task_configs` selects the task files to load. Foundry uses their definitions to construct the task readouts, target extractors, losses, and metrics.
+
+`hyperparameters` supplies values referenced elsewhere in the configuration.
+
+`trainer` overrides the default PyTorch Lightning trainer settings. Here, early stopping monitors validation accuracy and stops after ten validation checks without sufficient improvement. The monitored metric name must match a metric produced by the selected task.
+
+`stage.mode: direct` uses the configured data location directly instead of staging a copy.
+
+Run the experiment from the repository root with:
+
+```Bash
+uv run python main.py experiment=example/example_experiment
+```
+
+Individual settings can also be overridden from the command line:
+
+```Bash
+uv run python main.py \
+  experiment=example/example_experiment \
+  hyperparameters.batch_size=32 \
+  trainer.max_epochs=20
+```
+
+This keeps experiment choices in configuration files while leaving the dataset, model, and training implementations reusable.
 
 ## Running on Foundry
 
@@ -226,6 +344,8 @@ To run on foundry you need to create a .toml file that points to a docker contai
 
 To run a foundry session you can either spawn a srun and call
 
-`uv run python main.py experiment=experiment_folder/experiment_file`
+```Bash
+uv run python main.py experiment=example/example_experiment
+```
 
 or run it through a sbatch command. An example sbatch script has been added to the repo as `run_example.sh`

@@ -1,4 +1,4 @@
 _target_: foundry.models.ExampleMLP
 
-num_channels: 64
+num_channels: 32
 hidden_dim: 128

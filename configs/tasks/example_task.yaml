@@ -2,8 +2,6 @@ name: example_task
 
 target: frequency
 
-num_classes: 2
-
 head:
   _target_: foundry.tasks.heads.ReadoutHead
   output_dim: 2

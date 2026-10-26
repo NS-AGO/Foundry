@@ -37,7 +37,7 @@ class ExampleMLP(nn.Module):
         )
 
         self.router = build_readout_router(
-            task_configs,
+            self.task_configs,
             hidden_dim,
         )
 
@@ -63,16 +63,6 @@ class ExampleMLP(nn.Module):
         ValueError
             Cannot tokenize and empty signal.
         """
-        # for field in ("ecog", "eeg", "seeg", "ieeg"):
-        #     series = getattr(data, field, None)
-        #     if series is not None:
-        #         break
-        # else:
-        #     raise ValueError("Expected an ecog, eeg, seeg, or ieeg signal.")
-
-        # signal = getattr(series, "signal", None)
-        # if signal is None:
-        #     signal = series.data
 
         signal = np.asarray(data.ecog.data, dtype=np.float32)
         if signal.ndim != 2 or signal.shape[1] != self.num_channels:
