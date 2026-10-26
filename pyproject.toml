@@ -19,6 +19,7 @@ dependencies = [
     "wandb>=0.24.0",
     "auditorydecoding",
     "optuna>=4.8.0",
+    "ray==2.58.0",
 ]
 
 [dependency-groups]

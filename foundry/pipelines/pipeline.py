@@ -14,6 +14,8 @@ from torch_brain.data import (
     SubjectDescription,
     DeviceDescription,
 )
+from mne_bids import get_bids_path_from_fname, read_raw_bids
+
 from torch_brain.pipeline import BrainsetPipeline
 
 from torch_brain.utils.mne import extract_channels
@@ -55,10 +57,26 @@ class Pipeline(BrainsetPipeline):
             return
 
         # Stitch all recordings of the session together in order.
-        raws = [
-            mne.io.read_raw_brainvision(p, preload=True)
-            for p in download_output.paths
-        ]
+        raws = []
+
+        for path in download_output.paths:
+            raw = read_raw_bids(
+                get_bids_path_from_fname(path),
+                extra_params={"preload": True},
+            )
+
+            # Match the larger pipeline: infer rest between annotated events.
+            annotations = raw.annotations
+            if "rest" not in annotations.description:
+                for previous, following in zip(annotations[:-1], annotations[1:]):
+                    start = previous["onset"] + previous["duration"]
+                    end = following["onset"]
+
+                    if end > start:
+                        raw.annotations.append(start, end - start, "rest")
+
+            raws.append(raw)
+
         raw = mne.concatenate_raws(raws)
 
         signal = IrregularTimeSeries(
@@ -67,22 +85,85 @@ class Pipeline(BrainsetPipeline):
             domain="auto",
         )
 
-        # Each "Stimulus/..." marker is a stimulus onset (BrainVision markers
-        # have ~zero duration, so a trial runs from one onset to the next).
-        onsets = np.array(
-            [a["onset"] for a in raw.annotations if a["description"].startswith("Stimulus")]
-        )
-        if len(onsets) < 4:
-            found = sorted(set(raw.annotations.description))
-            raise ValueError(
-                f"{session_id}: found {len(onsets)} 'Stimulus' annotations. "
-                f"Annotation descriptions in this file: {found}"
+        # This block sets labels of on vs off. What's important to note here
+        # is that they're packaged in Interval.behavior_ids.
+        starts, ends, labels = [], [], []
+
+        for annotation in raw.annotations:
+            description = annotation["description"].lower()
+
+            if description == "rest" or "baseline" in description:
+                label = 0
+            elif "stim" in description and (
+                "hz" in description
+                or "white-noise" in description
+                or "whitenoise" in description
+            ):
+                label = 1
+            else:
+                continue
+
+            start = annotation["onset"] - raw.first_time
+            end = start + annotation["duration"]
+
+            if end <= start:
+                continue
+
+            # Divide long off/baseline periods into 0.5-second examples.
+            boundaries = (
+                np.append(np.arange(start, end, 0.5), end)
+                if label == 0
+                else np.array([start, end])
             )
-        ends = np.append(onsets[1:], raw.times[-1])
-        trials = Interval(start=onsets, end=ends)
+
+            for left, right in zip(boundaries[:-1], boundaries[1:]):
+                starts.append(left)
+                ends.append(right)
+                labels.append(label)
+
+        if not labels:
+            raise ValueError("No on/off trials found. Check the BIDS annotations.")
+
+        starts = np.asarray(starts)
+        ends = np.asarray(ends)
+        labels = np.asarray(labels, dtype=np.int64)
+
+        # Remove empty or rounding-sized trials BEFORE checking overlaps.
+        keep = (ends - starts) > 1e-8
+        starts, ends, labels = starts[keep], ends[keep], labels[keep]
+
+        order = np.argsort(starts)
+        starts, ends, labels = starts[order], ends[order], labels[order]
+
+        overlap = ends[:-1] - starts[1:]
+
+        if np.any(overlap > 1e-4):
+            i = np.flatnonzero(overlap > 1e-4)[0]
+            raise ValueError(
+                f"Trials overlap by {overlap[i]:.6f}s: "
+                f"({starts[i]}, {ends[i]}) and "
+                f"({starts[i + 1]}, {ends[i + 1]})"
+            )
+
+        # Clip tiny floating-point overlaps.
+        ends[:-1] = np.minimum(ends[:-1], starts[1:])
+
+        # Remove any intervals made empty by clipping.
+        keep = (ends - starts) > 1e-8
+        starts, ends, labels = starts[keep], ends[keep], labels[keep]
+
+        trials = Interval(
+            start=starts,
+            end=ends,
+            timestamps=(starts + ends) / 2,
+            behavior_ids=np.asarray(labels, dtype=np.int64),
+            timekeys=["start", "end", "timestamps"],
+        )
+        trials.sort()
 
         channels = extract_channels(raw)
 
+        # This is the final data object and the fields you will access to retrieve data
         data = Data(
             brainset=BrainsetDescription(
                 id=self.brainset_id,
@@ -99,7 +180,7 @@ class Pipeline(BrainsetPipeline):
             device=DeviceDescription(id=session_id),
             ecog=signal,
             channels=channels,
-            trials=trials,
+            on_vs_off_trials=trials,
             domain=signal.domain,
         )
 

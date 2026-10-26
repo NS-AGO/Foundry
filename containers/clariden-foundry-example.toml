@@ -1,0 +1,11 @@
+
+image = "/capstor/store/cscs/swissai/a0091/ce-images/example-foundry+0.1.sqsh"
+writable = true
+
+mounts = [
+  "/capstor/scratch/cscs/${USER}/Foundry",
+  "${PROJECT}:${PROJECT}",
+  "/capstor/scratch/cscs/${USER}:/capstor/scratch/cscs/${USER}",
+]
+
+

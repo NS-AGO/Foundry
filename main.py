@@ -717,9 +717,7 @@ def _log_config_to_wandb(trainer, cfg: DictConfig):
     if provenance:
         config_to_log.update(provenance)
 
-    trainer.logger.experiment.config.update(
-        config_to_log, allow_val_change=True
-    )
+    trainer.logger.log_hyperparams(config_to_log)
 
 
 def _log_normalization_artifacts_to_wandb(
