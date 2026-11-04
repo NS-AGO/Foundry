@@ -2,7 +2,7 @@
 
 #SBATCH --job-name=foundry_experiment
 #SBATCH --account=go125
-#SBATCH --environment=/capstor/scratch/cscs/awgolab/Foundry/containers/clariden-foundry-example.toml
+#SBATCH --environment=/capstor/scratch/cscs/${USER}/Foundry/containers/clariden-foundry-example.toml
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 #SBATCH --time=04:00:00
